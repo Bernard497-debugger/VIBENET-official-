@@ -2955,6 +2955,217 @@ def api_campaign_payment_status(campaign_id):
     })
 
 
+# ========== VERIFIED BADGE SYSTEM ==========
+@app.route("/api/verified-badge/request", methods=["POST"])
+def request_verified_badge():
+    """Request verified badge (P50)"""
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Not logged in"}), 401
+    
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    
+    if user.verified:
+        return jsonify({"error": "Already verified"}), 400
+    
+    existing = VerifiedRequest.query.filter_by(user_email=email).first()
+    if existing:
+        return jsonify({"error": "Already requested"}), 400
+    
+    req = VerifiedRequest(user_email=email)
+    db.session.add(req)
+    db.session.commit()
+    
+    return jsonify({"success": True, "message": "Verified badge request submitted"})
+
+@app.route("/api/verified-status")
+def verified_status():
+    """Get verified status"""
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"verified": False})
+    
+    user = User.query.filter_by(email=email).first()
+    return jsonify({"verified": bool(user.verified) if user else False})
+
+
+# ========== PAYOUT SYSTEM ==========
+@app.route("/api/payout-request", methods=["POST"])
+def payout_request():
+    """Request payout (min P10)"""
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Not logged in"}), 401
+    
+    data = request.get_json() or {}
+    amount = data.get("amount")
+    orange_money = data.get("orange_money", "")
+    
+    if not amount or amount < 10:
+        return jsonify({"error": "Minimum payout is P10"}), 400
+    
+    if not orange_money:
+        return jsonify({"error": "Orange Money number required"}), 400
+    
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    
+    if user.earnings < amount:
+        return jsonify({"error": "Insufficient earnings"}), 400
+    
+    payout = Payout(
+        user_email=email,
+        amount=amount,
+        status="pending",
+        payment_method="orange_money",
+        payment_details=orange_money
+    )
+    db.session.add(payout)
+    db.session.commit()
+    
+    return jsonify({"success": True, "message": "Payout request submitted"})
+
+@app.route("/api/payout-history")
+def payout_history():
+    """Get payout history"""
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Not logged in"}), 401
+    
+    payouts = Payout.query.filter_by(user_email=email).order_by(Payout.created_at.desc()).all()
+    return jsonify([p.to_dict() for p in payouts])
+
+
+# ========== CONTENT REPORTS ==========
+@app.route("/api/report", methods=["POST"])
+def api_report():
+    """Report inappropriate content"""
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Not logged in"}), 401
+    
+    data = request.get_json() or {}
+    post_id = data.get("post_id")
+    reason = data.get("reason", "")
+    description = data.get("description", "")
+    
+    if not post_id or not reason:
+        return jsonify({"error": "Post ID and reason required"}), 400
+    
+    report = Report(
+        reporter_email=email,
+        post_id=post_id,
+        reason=reason,
+        description=description,
+        status="pending"
+    )
+    db.session.add(report)
+    db.session.commit()
+    
+    return jsonify({"success": True, "message": "Report submitted"})
+
+
+# ========== ADMIN DASHBOARD ==========
+@app.route("/admin")
+def admin_dashboard():
+    """Admin dashboard"""
+    admin_email = os.environ.get("ADMIN_EMAIL", "botsile55@gmail.com")
+    
+    if session.get("user_email") != admin_email:
+        return jsonify({"error": "Unauthorized"}), 403
+    
+    total_users = User.query.count()
+    total_posts = Post.query.count()
+    total_earnings = db.session.query(db.func.sum(User.earnings)).scalar() or 0
+    
+    pending_verified = VerifiedRequest.query.filter_by(status="pending").all()
+    pending_payouts = Payout.query.filter_by(status="pending").all()
+    pending_reports = Report.query.filter_by(status="pending").all()
+    
+    return jsonify({
+        "stats": {
+            "total_users": total_users,
+            "total_posts": total_posts,
+            "total_earnings": total_earnings
+        },
+        "pending": {
+            "verified": [v.to_dict() for v in pending_verified],
+            "payouts": [p.to_dict() for p in pending_payouts],
+            "reports": [r.to_dict() for r in pending_reports]
+        }
+    })
+
+@app.route("/api/admin/verified/<int:req_id>/approve", methods=["POST"])
+def approve_verified(req_id):
+    """Approve verified badge"""
+    admin_email = os.environ.get("ADMIN_EMAIL", "botsile55@gmail.com")
+    if session.get("user_email") != admin_email:
+        return jsonify({"error": "Unauthorized"}), 403
+    
+    req = VerifiedRequest.query.get_or_404(req_id)
+    user = User.query.filter_by(email=req.user_email).first()
+    
+    if user:
+        user.verified = 1
+        user.verified_at = now_ts()
+    
+    req.status = "approved"
+    req.processed_at = now_ts()
+    db.session.commit()
+    
+    return jsonify({"success": True})
+
+@app.route("/api/admin/payout/<int:payout_id>/approve", methods=["POST"])
+def approve_payout(payout_id):
+    """Approve payout"""
+    admin_email = os.environ.get("ADMIN_EMAIL", "botsile55@gmail.com")
+    if session.get("user_email") != admin_email:
+        return jsonify({"error": "Unauthorized"}), 403
+    
+    payout = Payout.query.get_or_404(payout_id)
+    payout.status = "approved"
+    payout.processed_at = now_ts()
+    
+    user = User.query.filter_by(email=payout.user_email).first()
+    if user:
+        user.earnings -= payout.amount
+    
+    db.session.commit()
+    
+    return jsonify({"success": True})
+
+@app.route("/api/admin/report/<int:report_id>/resolve", methods=["POST"])
+def resolve_report(report_id):
+    """Resolve report"""
+    admin_email = os.environ.get("ADMIN_EMAIL", "botsile55@gmail.com")
+    if session.get("user_email") != admin_email:
+        return jsonify({"error": "Unauthorized"}), 403
+    
+    data = request.get_json() or {}
+    action = data.get("action", "ignore")
+    
+    report = Report.query.get_or_404(report_id)
+    report.status = "resolved"
+    report.processed_at = now_ts()
+    
+    if action == "remove":
+        post = Post.query.get(report.post_id)
+        if post:
+            db.session.delete(post)
+    elif action == "ban":
+        post = Post.query.get(report.post_id)
+        if post:
+            user = User.query.filter_by(email=post.author_email).first()
+            if user:
+                user.banned = 1
+    
+    db.session.commit()
+    
+    return jsonify({"success": True})
+
 
 # ══════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":

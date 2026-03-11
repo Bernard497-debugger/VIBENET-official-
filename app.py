@@ -1,34 +1,32 @@
 # VibeNet - No SQLAlchemy (Pure Flask + In-Memory Storage)
 import os
-import uuid
-import json
 from datetime import datetime
-from flask import Flask, request, jsonify, session, render_template_string
+from flask import Flask, request, jsonify, session
 
-app = Flask(__name__, static_folder=None)
+app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "vibenet_secret_dev")
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
 
 # ========== IN-MEMORY STORAGE ==========
-USERS = {}  # email -> {id, name, email, password, profile_pic, bio, watch_hours, earnings, verified, banned, created_at}
-POSTS = {}  # post_id -> {id, author_email, author_name, text, file_url, timestamp, reactions, comments_count}
-COMMENTS = {}  # comment_id -> {id, post_id, author_email, author_name, text, timestamp}
-FOLLOWERS = {}  # (user_email, follower_email) -> True
-REACTIONS = {}  # (user_email, post_id) -> emoji
-NOTIFICATIONS = {}  # notif_id -> {id, user_email, text, timestamp, seen}
-VERIFIED_REQUESTS = {}  # req_id -> {id, user_email, status, created_at}
-PAYOUTS = {}  # payout_id -> {id, user_email, amount, status, payment_method, created_at}
-CAMPAIGNS = {}  # campaign_id -> {id, advertiser_email, title, budget, impressions, clicks, status, created_at}
-PAYMENTS = {}  # payment_id -> {id, user_email, campaign_id, amount, status, created_at}
+USERS = {}
+POSTS = {}
+COMMENTS = {}
+FOLLOWERS = {}
+REACTIONS = {}
+NOTIFICATIONS = {}
+VERIFIED_REQUESTS = {}
+PAYOUTS = {}
+CAMPAIGNS = {}
+PAYMENTS = {}
 
 # Counters
-POST_ID = 1
-COMMENT_ID = 1
-NOTIF_ID = 1
-REQ_ID = 1
-PAYOUT_ID = 1
-CAMPAIGN_ID = 1
-PAYMENT_ID = 1
+POST_ID = [1]
+COMMENT_ID = [1]
+NOTIF_ID = [1]
+REQ_ID = [1]
+PAYOUT_ID = [1]
+CAMPAIGN_ID = [1]
+PAYMENT_ID = [1]
 
 def now_ts():
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -95,8 +93,6 @@ def api_me():
 # ========== POSTS ==========
 @app.route("/api/posts", methods=["GET", "POST"])
 def api_posts():
-    global POST_ID
-    
     if request.method == "GET":
         posts = list(POSTS.values())
         return jsonify(sorted(posts, key=lambda x: x["timestamp"], reverse=True))
@@ -111,7 +107,7 @@ def api_posts():
         return jsonify({"error": "Not logged in"}), 401
     
     post = {
-        "id": POST_ID,
+        "id": POST_ID[0],
         "author_email": author_email,
         "author_name": author_name,
         "text": text,
@@ -122,8 +118,8 @@ def api_posts():
         "verified": USERS.get(author_email, {}).get("verified", False)
     }
     
-    POSTS[POST_ID] = post
-    POST_ID += 1
+    POSTS[POST_ID[0]] = post
+    POST_ID[0] += 1
     
     return jsonify(post), 201
 
@@ -144,8 +140,6 @@ def delete_post(post_id):
 # ========== COMMENTS ==========
 @app.route("/api/posts/<int:post_id>/comments", methods=["GET", "POST"])
 def api_comments(post_id):
-    global COMMENT_ID
-    
     if request.method == "GET":
         return jsonify([c for c in COMMENTS.values() if c["post_id"] == post_id])
     
@@ -161,7 +155,7 @@ def api_comments(post_id):
         return jsonify({"error": "Post not found"}), 404
     
     comment = {
-        "id": COMMENT_ID,
+        "id": COMMENT_ID[0],
         "post_id": post_id,
         "author_email": author_email,
         "author_name": author_name,
@@ -169,9 +163,9 @@ def api_comments(post_id):
         "timestamp": now_ts()
     }
     
-    COMMENTS[COMMENT_ID] = comment
+    COMMENTS[COMMENT_ID[0]] = comment
     POSTS[post_id]["comments_count"] = POSTS[post_id].get("comments_count", 0) + 1
-    COMMENT_ID += 1
+    COMMENT_ID[0] += 1
     
     return jsonify(comment), 201
 
@@ -266,7 +260,7 @@ def watch_video():
     if author_email and author_email in USERS:
         watch_hours = watch_seconds / 3600
         USERS[author_email]["watch_hours"] += watch_hours
-        USERS[author_email]["earnings"] += watch_hours * 0.10  # P0.10 per hour
+        USERS[author_email]["earnings"] += watch_hours * 0.10
         
         return jsonify({"success": True, "earnings": USERS[author_email]["earnings"]})
     
@@ -290,8 +284,6 @@ def get_earnings(email):
 # ========== VERIFIED BADGES ==========
 @app.route("/api/verified-badge/request", methods=["POST"])
 def request_verified():
-    global REQ_ID
-    
     email = session.get("user_email")
     if not email:
         return jsonify({"error": "Not logged in"}), 401
@@ -303,13 +295,13 @@ def request_verified():
     if existing:
         return jsonify({"error": "Already requested"}), 400
     
-    VERIFIED_REQUESTS[REQ_ID] = {
-        "id": REQ_ID,
+    VERIFIED_REQUESTS[REQ_ID[0]] = {
+        "id": REQ_ID[0],
         "user_email": email,
         "status": "pending",
         "created_at": now_ts()
     }
-    REQ_ID += 1
+    REQ_ID[0] += 1
     
     return jsonify({"success": True, "message": "Verified badge request submitted"})
 
@@ -325,8 +317,6 @@ def verified_status():
 # ========== PAYOUTS ==========
 @app.route("/api/payout-request", methods=["POST"])
 def payout_request():
-    global PAYOUT_ID
-    
     email = session.get("user_email")
     if not email:
         return jsonify({"error": "Not logged in"}), 401
@@ -345,8 +335,8 @@ def payout_request():
     if user["earnings"] < amount:
         return jsonify({"error": "Insufficient earnings"}), 400
     
-    PAYOUTS[PAYOUT_ID] = {
-        "id": PAYOUT_ID,
+    PAYOUTS[PAYOUT_ID[0]] = {
+        "id": PAYOUT_ID[0],
         "user_email": email,
         "amount": amount,
         "status": "pending",
@@ -354,7 +344,7 @@ def payout_request():
         "payment_details": orange_money,
         "created_at": now_ts()
     }
-    PAYOUT_ID += 1
+    PAYOUT_ID[0] += 1
     
     return jsonify({"success": True, "message": "Payout request submitted"})
 
@@ -370,8 +360,6 @@ def payout_history():
 # ========== CAMPAIGNS/ADS ==========
 @app.route("/api/campaigns", methods=["GET", "POST"])
 def api_campaigns():
-    global CAMPAIGN_ID
-    
     if request.method == "GET":
         return jsonify(list(CAMPAIGNS.values()))
     
@@ -383,8 +371,8 @@ def api_campaigns():
     if not advertiser_email:
         return jsonify({"error": "Not logged in"}), 401
     
-    CAMPAIGNS[CAMPAIGN_ID] = {
-        "id": CAMPAIGN_ID,
+    CAMPAIGNS[CAMPAIGN_ID[0]] = {
+        "id": CAMPAIGN_ID[0],
         "advertiser_email": advertiser_email,
         "title": title,
         "budget": budget,
@@ -393,9 +381,9 @@ def api_campaigns():
         "status": "active",
         "created_at": now_ts()
     }
-    CAMPAIGN_ID += 1
+    CAMPAIGN_ID[0] += 1
     
-    return jsonify(CAMPAIGNS[CAMPAIGN_ID - 1]), 201
+    return jsonify(CAMPAIGNS[CAMPAIGN_ID[0] - 1]), 201
 
 @app.route("/api/campaigns/<int:campaign_id>/impression", methods=["POST"])
 def campaign_impression(campaign_id):
@@ -470,7 +458,7 @@ def favicon():
 # ========== MAIN PAGE ==========
 @app.route("/")
 def index():
-    return render_template_string("""
+    html = """
     <!DOCTYPE html>
     <html>
     <head>
@@ -624,8 +612,7 @@ def index():
             const j = await res.json();
             
             if (j.success) {
-                alert('Account created!');
-                window.location.href = '/feed';
+                window.location.href = '/dashboard';
             } else {
                 alert('Error: ' + (j.error || 'Signup failed'));
             }
@@ -648,8 +635,7 @@ def index():
             const j = await res.json();
             
             if (j.user) {
-                alert('Logged in!');
-                window.location.href = '/feed';
+                window.location.href = '/dashboard';
             } else {
                 alert('Invalid credentials');
             }
@@ -657,7 +643,114 @@ def index():
         </script>
     </body>
     </html>
-    """)
+    """
+    return html
+
+@app.route("/dashboard")
+def dashboard():
+    email = session.get("user_email")
+    if not email or email not in USERS:
+        return index()
+    
+    user = USERS[email]
+    posts = list(POSTS.values())
+    
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>VibeNet Dashboard</title>
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                background: #0d1117;
+                color: #c8d8f0;
+                padding: 20px;
+            }
+            .header {
+                background: #161b22;
+                border: 1px solid #30363d;
+                border-radius: 12px;
+                padding: 20px;
+                margin-bottom: 20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .user-info h2 { color: #4DF0C0; margin-bottom: 5px; }
+            .user-info p { font-size: 12px; color: #8899b4; }
+            .btn {
+                padding: 10px 20px;
+                background: #4DF0C0;
+                color: #0d1117;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+                font-weight: 600;
+            }
+            .btn:hover { opacity: 0.9; }
+            .container { max-width: 600px; margin: 0 auto; }
+            .post {
+                background: #161b22;
+                border: 1px solid #30363d;
+                border-radius: 12px;
+                padding: 20px;
+                margin-bottom: 15px;
+            }
+            .post-author { font-weight: 600; color: #4DF0C0; }
+            .post-text { margin: 10px 0; }
+            .post-time { font-size: 11px; color: #8899b4; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="user-info">
+                <h2>""" + user["name"] + """</h2>
+                <p>💰 P""" + str(round(user["earnings"], 2)) + """ | ⏱️ """ + str(round(user["watch_hours"], 2)) + """h</p>
+            </div>
+            <button class="btn" onclick="logout()">Logout</button>
+        </div>
+        
+        <div class="container" id="posts-container">
+            <p style="text-align: center; color: #8899b4;">No posts yet</p>
+        </div>
+
+        <script>
+        const posts = """ + str(posts).replace("'", '"') + """;
+        
+        function loadPosts() {
+            const container = document.getElementById('posts-container');
+            if (!posts || posts.length === 0) {
+                return;
+            }
+            
+            container.innerHTML = posts.map(p => `
+                <div class="post">
+                    <div class="post-author">${p.author_name} ${p.verified ? '✦' : ''}</div>
+                    <div class="post-text">${p.text}</div>
+                    <div class="post-time">${p.timestamp}</div>
+                </div>
+            `).join('');
+        }
+        
+        async function logout() {
+            await fetch('/api/logout', {method: 'POST'});
+            window.location.href = '/';
+        }
+        
+        loadPosts();
+        </script>
+    </body>
+    </html>
+    """
+    return html
+
+@app.route("/feed")
+def feed():
+    return dashboard()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
